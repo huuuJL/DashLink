@@ -1,9 +1,12 @@
 import { AudioEngine } from './audio';
+import { configureDesktopViewer } from './desktop';
 import { InputController } from './input';
 import { MicrophoneUplink } from './mic';
 import type { ServerMessage, WireMessage } from './protocol';
 import { VideoPlayer } from './video';
 import { Connection, type ConnectionState } from './ws';
+
+configureDesktopViewer();
 
 function requiredElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -170,7 +173,7 @@ function applyServerState(message: ServerMessage): void {
       if (!active) {
         resetSession();
         viewerState.textContent = 'STANDBY';
-        setOverlay('Your next drive starts here.', 'Connect your iPhone to PlayPort to bring CarPlay to this screen.');
+        setOverlay('Waiting for your iPhone', 'Keep both devices on the same Wi-Fi and accept the CarPlay prompt on your iPhone.');
       } else {
         if (!sessionActive) {
           viewerState.textContent = 'STARTING';
@@ -263,7 +266,11 @@ async function toggleFullscreen(): Promise<void> {
 }
 
 document.addEventListener('fullscreenchange', () => {
-  requiredElement('btn-fullscreen').setAttribute('aria-label', document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen');
+  const title = document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen';
+  const button = requiredElement('btn-fullscreen');
+  button.setAttribute('aria-label', title);
+  const label = button.querySelector('span');
+  if (label) label.textContent = title;
 });
 
 let toastTimer = 0;
@@ -597,7 +604,7 @@ function ensureStreamSliders(): void {
     row.className = 'audio-stream-row';
     row.dataset.stream = name;
     const label = document.createElement('label');
-    label.textContent = name;
+    label.textContent = ({ media: 'Music', telephony: 'Calls', speech: 'Voice', alert: 'Alerts' } as Record<string, string>)[name] ?? name;
     const slider = document.createElement('input');
     slider.type = 'range';
     slider.min = '0';

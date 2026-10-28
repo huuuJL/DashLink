@@ -10,13 +10,15 @@ const listeners = new Map();
 const frames = [];
 const messages = [];
 let modalOpen = false;
+let popoverOpen = false;
 let rect = { left: 100, top: 50, width: 400, height: 225 };
 class Element {
   constructor(tag = 'canvas') { this.tag = tag; }
   closest(selector) { return selector.split(',').map((s) => s.trim()).includes(this.tag) ? this : null; }
 }
 globalThis.Element = Element;
-globalThis.document = { querySelector: () => modalOpen ? {} : null };
+globalThis.document = { querySelector: (selector) =>
+  (modalOpen && selector.includes('dialog[open]')) || (popoverOpen && selector.includes(':popover-open')) ? {} : null };
 globalThis.window = {
   addEventListener: (name, handler) => listeners.set(name, handler),
   removeEventListener: (name) => listeners.delete(name),
@@ -44,6 +46,10 @@ surface.inert = false;
 modalOpen = true;
 key('Escape');
 modalOpen = false;
+popoverOpen = true;
+key('Escape');
+key('ArrowDown');
+popoverOpen = false;
 for (const tag of ['input', 'select', 'textarea', '[contenteditable="true"]']) key('ArrowUp', new Element(tag));
 key('Enter', new Element('button'));
 key(' ', new Element('a'));

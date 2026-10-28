@@ -84,7 +84,7 @@ export class InputController {
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (this.surface.inert || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-    if (document.querySelector('dialog[open]')) return;
+    if (document.querySelector('dialog[open], [popover]:popover-open')) return;
     if (event.target instanceof Element && (event.target.closest('input, select, textarea, [contenteditable="true"]') || ((event.key === 'Enter' || event.key === ' ') && event.target.closest('button, a')))) return;
     const knob = (overrides: Partial<KnobState>) => {
       event.preventDefault();

@@ -315,3 +315,67 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* DashLink owns connection setup and window chrome. Keep its viewer focused. */
+body.desktop {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  --bg: #101214; --panel: #1c1f22; --edge: #34383c;
+  --text: #f4f6f7; --muted: #b1b7bc; --accent: #72d9c8;
+}
+.desktop #app { min-height: 0; height: 100dvh; }
+.desktop #header, .desktop .rail, .desktop .workspace-heading,
+.desktop .viewer-bar, .desktop .viewer-footer, .desktop #toolbar,
+.desktop .workspace-footer, .desktop #btn-exit-focus { display: none; }
+.desktop .app-body, .desktop .workspace { min-height: 0; flex: 1; }
+.desktop .workspace { padding: 0; gap: 0; max-width: none; }
+.desktop .viewer { border: 0; border-radius: 0; box-shadow: none; min-height: 0; }
+.desktop #screen-container, .desktop #screen { background: #050607; }
+.desktop #overlay { background: #15191d; }
+.desktop #overlay::before, .desktop .connection-art, .desktop #overlay .eyebrow,
+.desktop .setup-note, .desktop #btn-setup { display: none; }
+.desktop #overlay h2 { font-size: 24px; font-weight: 600; letter-spacing: -.3px; }
+.desktop #overlay-text { font-size: 14px; }
+.desktop-controls { display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 10px 20px; min-height: 64px; background: #1c1f22;
+  border-top: 1px solid var(--edge); flex: none; }
+.desktop-navigation { display: flex; gap: 6px; }
+.desktop-controls .control-button { min-height: 40px; min-width: 64px; flex-direction: row;
+  gap: 8px; padding: 0 8px; font-size: 12px; color: var(--text); }
+.desktop-controls .media-controls { border: 0; padding: 0; gap: 8px; }
+.desktop-controls .play-button { width: 40px; height: 40px; color: #102521; }
+.desktop-controls .quick-volume { gap: 6px; }
+.desktop-controls .quick-volume input { width: 90px; }
+.desktop-controls .quick-volume output { font-size: 11px; color: var(--muted); }
+.desktop #audio-unlock-hint { display: inline; color: var(--accent); font-size: 12px; }
+.desktop-more { padding: 10px 14px; border: 1px solid #4b5156; border-radius: 8px; font-size: 13px; }
+.desktop-more:hover { background: #30363a; }
+#desktop-options { inset: auto 12px 74px auto; margin: 0; width: 286px; padding: 10px;
+  background: #24282c; color: var(--text); border: 1px solid #4b5156; border-radius: 12px;
+  box-shadow: 0 12px 35px #0006; }
+#desktop-options:popover-open { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+#desktop-options button { display: flex; flex-direction: row; align-items: center; gap: 10px;
+  width: auto; min-width: 0; min-height: 44px; height: auto; padding: 9px; border-radius: 7px;
+  font-size: 12px; color: var(--text); text-align: left; }
+#desktop-options button:hover { background: #353b40; }
+#desktop-options button .icon { width: 18px; height: 18px; }
+#desktop-options .desktop-stats { grid-column: 1/-1; margin: 8px 6px 2px; color: var(--muted); font-size: 11px; }
+.desktop #mic-status:not(:empty) { position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+  padding: 8px 12px; border-radius: 8px; background: #1c1f22; font-size: 13px; }
+.desktop .panel-heading .eyebrow, .desktop .section-tag, .desktop .panel-intro { display: none; }
+.desktop dialog { font-family: inherit; background: #1c1f22; }
+.desktop .panel-heading h2 { font-size: 24px; letter-spacing: -.3px; }
+.desktop .panel-section h3, .desktop .field label, .desktop .dimension-fields label { font-size: 13px; }
+.desktop .panel-hint, .desktop .panel-tip p, .desktop .connection-steps p, .desktop .restart-note { font-size: 12px; }
+.desktop .preset-copy { font-size: 12px; }
+.desktop .preset-copy small { font-size: 11px; }
+.desktop #error-banner { bottom: 76px; }
+@media (max-width: 880px) {
+  .desktop-controls { gap: 8px; padding-inline: 12px; }
+  .desktop-controls .control-button { min-width: 42px; }
+  .desktop-controls .control-button span { display: none; }
+  .desktop-controls .quick-volume input { width: 68px; }
+  .desktop-controls .media-controls { gap: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .desktop *, .desktop *::before, .desktop *::after { animation: none !important; transition: none !important; }
+}
