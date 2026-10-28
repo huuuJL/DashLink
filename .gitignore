@@ -1,0 +1,34 @@
+# Build outputs and packaged applications
+.build/
+.build-local/
+.swiftpm/
+*.app/
+*.zip
+*.zip.sha256
+Receiver/**/build/
+Receiver/.gradle/
+Receiver/.kotlin/
+Receiver/web/node_modules/
+Receiver/web/dist/
+__pycache__/
+*.pyc
+
+# Local credentials, configuration overrides, and receiver state
+.env
+.env.*
+!.env.example
+*.pk8
+*.p7b
+*.p12
+*.p8
+*.key
+*.pem
+Install.json
+DashLinkState/
+state/
+*.log
+
+# OS and editor metadata
+.DS_Store
+.idea/
+.vscode/
