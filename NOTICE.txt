@@ -1,0 +1,48 @@
+DashLink 0.2.0 — experimental macOS test release
+
+The included receiver is based on PlayPort by youcci:
+https://github.com/youcci/playport
+Upstream commit: 9a0882dd0ffe48e467b59d58b12d81391df55ade
+PlayPort is derived from DiPlay by shihabal3amri and xcertplay by shilapi.
+Receiver and DashLink source are provided under GPL-3.0. See Receiver/LICENSE.
+
+Local changes: simplified native connection flow and compact CarPlay controls;
+portable test-release packaging with corresponding source and no user state;
+native SwiftUI setup and WKWebView; explicit phone selection;
+interactive Bluetooth code confirmation; loopback-only display listener in desktop
+mode; private stdin handoff for Wi-Fi password and display token; no Wi-Fi password
+persistence; parent-exit cleanup; patched display build dependencies; fresh
+Bluetooth service discovery, bounded scans, RFCOMM packet sizing, pairing state
+validation and visible connection diagnostics; reuse of saved pairings and
+separate Bluetooth connection checks; direct pairing to the selected device;
+confirmation delivery diagnostics; native in-app Bluetooth discovery, pairing,
+request-bound code approval, and RFCOMM channel verification; native Bluetooth
+transport for the desktop receiver through a session-authenticated loopback link. The bundled runtime includes the receiver’s required network modules. Desktop
+CarPlay announcements use the native host Bluetooth identity consistently, and
+voice input capabilities match the permission-gated microphone implementation.
+The viewer attempts to resume sound when loaded and reflects the actual audio
+output state; ordinary browser gesture requirements remain respected.
+Music uses buffering sized for observed wireless packet bursts; numeric playback
+health is logged locally without audio content. Audio scheduling tolerates packet jitter and limits burst buffering without
+cancelling sound already queued for playback. Video
+uses low-latency decoding and paints the latest frame per display refresh.
+See README.md in the source distribution for tested compatibility and limits.
+
+The Java runtime is Eclipse Temurin OpenJDK 21.0.13+9 (aarch64 macOS),
+assembled with jlink. Its component notices are retained under engine/runtime/legal.
+Download SHA-256: bf036b35b071bfb2f54f2c0af8ee8d88afa95ee6eb3dce02c0f94cfc2524d04a
+https://adoptium.net/
+The receiver includes Kotlin, Ktor, kotlinx.serialization, JmDNS, Bouncy Castle,
+SLF4J and transitive JVM dependencies. Their packaged notices remain in the JARs.
+
+No CarPlay accessory private key or certificate is distributed with this app or
+its source. The optional setup action downloads the pinned DiPlay 0.2.7 preview
+from its maintainer's GitHub release, checks the release SHA-256, and extracts only
+its experimental connection files to a private local data directory. The APK is
+not executed. These files are not relicensed by DashLink. See:
+https://github.com/shihabal3amri/DiPlay/blob/main/docs/THIRD_PARTY_NOTICES.md
+This is not an Apple-certified product. Acceptance of the experimental identity
+and compatibility with future iOS updates are not guaranteed.
+
+CarPlay, iPhone, and macOS are Apple Inc. trademarks. No affiliation or endorsement
+by Apple, Carlinkit, or the upstream projects is implied.

@@ -1,0 +1,39 @@
+DashLink 0.2.0 (17) — test release validation
+28 October 2026
+
+PASSED
+- Native app compiled for ARM64/macOS 15 with Swift 6 strict concurrency.
+- Connection-state checks: one Connect action is available for a known phone;
+  pairing and Bluetooth verification remain required; concurrent starts blocked.
+- Pairing-confirmation checks: stale, duplicate, cancelled, and passkey-only
+  approvals rejected.
+- Native process checks: private stdin, output capture, shutdown, and timeout.
+- Native relay checks: token rejection, bounded greetings, fragmented auth,
+  single peer, ordered bytes, and reconnect.
+- Viewer input checks: keyboard isolation for dialogs/popovers, native controls,
+  touch coordinates, multi-touch, pointer release, and disconnected screens.
+- Audio/video checks: continuous music under simulated ~400 ms packet bursts,
+  bounded queues, underrun recovery, stream cleanup, and latest-frame painting.
+- TypeScript type check and optimized viewer build.
+- Exact packaged receiver integration: HTML and all assets served correctly,
+  invalid control token rejected, loopback-only viewer binding, no false phone
+  session, password absent from test log, and parent-exit cleanup.
+- Separate native UI preview: connection form, first-launch setup notice, help,
+  accessible field labels, and cancellation of the setup notice.
+- Isolated browser UI: compact controls, More popover, sound panel, and return.
+- Live updated Mac app: connected CarPlay shown in native accessibility state;
+  user confirmed successful connection and music playback with the new layout.
+- Shared source audit: no personal installation path, test-phone name, or Wi-Fi
+  network identifier. Package excludes all local identity, pairing state, and logs.
+
+REUSED UNCHANGED RECEIVER VALIDATION
+- 13 server tests passed; one real-accessory-identity test intentionally skipped.
+  The 0.2.0 UI release does not change the receiver backend.
+
+LIMITS
+- Locally signed (ad hoc); not Developer ID-signed or Apple-notarized.
+- Experimental accessory authentication; not Apple-certified for CarPlay.
+- ARM64 only. Live testing used macOS 27.2; macOS 15 compatibility is a build
+  target, not a completed minimum-version hardware test.
+- No claim of full Siri/call, sleep/wake, roaming, or long-session qualification.
+- No independent security audit or broad device compatibility certification.

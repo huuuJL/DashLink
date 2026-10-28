@@ -8,7 +8,8 @@
 Receiver/**/build/
 Receiver/.gradle/
 Receiver/.kotlin/
-Receiver/web/node_modules/
+**/node_modules
+**/node_modules [0-9]*
 Receiver/web/dist/
 __pycache__/
 *.pyc
