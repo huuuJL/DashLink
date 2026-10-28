@@ -30,6 +30,10 @@ data class ServerConfig(
     val wifiSecurity: Iap2WirelessSecurity = Iap2WirelessSecurity.WPA_WPA2,
     val bluetoothDeviceAddress: String? = null,
     val bluetoothBridge: Path? = null,
+    // Session-only desktop transport; populated through private stdin, never persisted.
+    val nativeBluetoothPort: Int? = null,
+    val nativeBluetoothToken: String? = null,
+    val nativeBluetoothAddress: String? = null,
     val mdns: String = "auto",
     val insecureHttp: Boolean = false,
     val accessToken: String = generateToken(),

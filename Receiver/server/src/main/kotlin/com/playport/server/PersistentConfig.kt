@@ -76,7 +76,7 @@ data class PersistentConfig(
             ),
             wireless = config.wireless,
             wifiSsid = config.wifiSsid,
-            wifiPassphrase = config.wifiPassphrase,
+            wifiPassphrase = null, // DashLink never persists the Wi-Fi password.
             wifiChannel = config.wifiChannel,
             wifiSecurity = when (config.wifiSecurity) {
                 com.shilapi.xcertplay.transport.Iap2WirelessSecurity.NONE -> "open"

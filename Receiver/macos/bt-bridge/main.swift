@@ -9,7 +9,8 @@
 //   bt-bridge --list                   list paired devices as "AA:BB:CC:DD:EE:FF Name"
 //   bt-bridge --address <addr>         open RFCOMM to the device and pump stdio
 //
-// The iPhone must already be paired in System Settings > Bluetooth.
+// Use --scan and --pair for app-driven pairing. Ordinary Mac pairing from the
+// iPhone's Bluetooth list may report "not supported".
 
 import Foundation
 import IOBluetooth
@@ -78,8 +79,15 @@ func listPaired() {
     }
 }
 
-final class Bridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
+final class Bridge: NSObject, IOBluetoothRFCOMMChannelDelegate, IOBluetoothDeviceAsyncCallbacks {
     private var channel: IOBluetoothRFCOMMChannel?
+    private var device: IOBluetoothDevice?
+    private var discoveryComplete = false
+    private var connecting = false
+    private var channelOpened = false
+    private let checkOnly: Bool
+
+    init(checkOnly: Bool = false) { self.checkOnly = checkOnly }
 
     func start(address: String) {
         guard let devices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
@@ -87,27 +95,104 @@ final class Bridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         }
         let target = normalize(address)
         guard let device = devices.first(where: { normalize($0.addressString ?? "") == target }) else {
-            fail("device \(address) is not paired; pair it in System Settings > Bluetooth first")
+            fail("device \(address) has no saved pairing; pair it in DashLink first")
         }
+        self.device = device
+        if device.isConnected() {
+            queryServices()
+        } else {
+            connecting = true
+            FileHandle.standardError.write(Data("bt-bridge: opening a Bluetooth connection using the saved pairing\n".utf8))
+            let status = device.openConnection(self, withPageTimeout: 16_000, authenticationRequired: true)
+            guard status == kIOReturnSuccess || device.isConnected() else {
+                fail("Bluetooth connection could not start (status 0x\(String(UInt32(bitPattern: status), radix: 16)))")
+            }
+            if device.isConnected() { connectionComplete(device, status: kIOReturnSuccess) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+                if self?.connecting == true {
+                    fail("Bluetooth connection timed out before service discovery; the saved pairing was not removed")
+                }
+            }
+        }
+        withExtendedLifetime(self) { RunLoop.main.run() }
+    }
+
+    private func queryServices() {
+        guard let device else { fail("selected phone is no longer available") }
+        FileHandle.standardError.write(Data("bt-bridge: Bluetooth connection is open; checking CarPlay services\n".utf8))
         let uuid = IOBluetoothSDPUUID(data: Data(hexUUID: iap2UUIDString))
-        let queried = withTimeout(12.0, "SDP query") { device.getServiceRecord(for: uuid) }
-        guard let record = queried else {
-            fail("the device does not expose the iAP2 service; is it paired and in range?")
+        if let record = device.getServiceRecord(for: uuid) {
+            FileHandle.standardError.write(Data("bt-bridge: using the phone’s saved iAP2 service; verifying it by opening the channel\n".utf8))
+            openChannel(record)
+            return
         }
+        // getServiceRecord only reads the cache. Query the selected phone first.
+        let queryStatus = device.performSDPQuery(self)
+        guard queryStatus == kIOReturnSuccess else {
+            fail("service discovery could not start (status 0x\(String(queryStatus, radix: 16)))")
+        }
+        FileHandle.standardError.write(Data("bt-bridge: requesting fresh services from the selected iPhone\n".utf8))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            if self?.discoveryComplete == false {
+                if let device = self?.device {
+                    let names = (device.services as? [IOBluetoothSDPServiceRecord] ?? [])
+                        .map { $0.getServiceName() ?? "unnamed" }.joined(separator: ", ")
+                    FileHandle.standardError.write(Data("bt-bridge: service query diagnostic: connected=\(device.isConnected()), cached services=[\(names)]\n".utf8))
+                }
+                fail("service discovery timed out; keep the selected iPhone unlocked and nearby")
+            }
+        }
+    }
+
+    func remoteNameRequestComplete(_ device: IOBluetoothDevice!, status: IOReturn) { }
+
+    func connectionComplete(_ device: IOBluetoothDevice!, status: IOReturn) {
+        guard connecting else { return }
+        connecting = false
+        guard status == kIOReturnSuccess else {
+            fail("Bluetooth connection failed (status 0x\(String(UInt32(bitPattern: status), radix: 16))); the saved pairing was not removed")
+        }
+        queryServices()
+    }
+
+    @objc func sdpQueryComplete(_ sender: IOBluetoothDevice!, status: IOReturn) {
+        discoveryComplete = true
+        guard status == kIOReturnSuccess else {
+            fail("service discovery failed (status 0x\(String(status, radix: 16)))")
+        }
+        guard let device else { fail("selected phone is no longer available") }
+        let uuid = IOBluetoothSDPUUID(data: Data(hexUUID: iap2UUIDString))
+        guard let record = device.getServiceRecord(for: uuid) else {
+            let names = (device.services as? [IOBluetoothSDPServiceRecord] ?? [])
+                .map { $0.getServiceName() ?? "unnamed" }.joined(separator: ", ")
+            fail("fresh service discovery did not find iAP2; advertised services: \(names)")
+        }
+        openChannel(record)
+    }
+
+    private func openChannel(_ record: IOBluetoothSDPServiceRecord) {
+        guard let device else { fail("selected phone is no longer available") }
         var channelID: BluetoothRFCOMMChannelID = 0
         let channelStatus = record.getRFCOMMChannelID(&channelID)
         guard channelStatus == kIOReturnSuccess else {
             fail("could not read the RFCOMM channel id (status 0x\(String(channelStatus, radix: 16)))")
         }
         var rfcommChannel: IOBluetoothRFCOMMChannel?
-        let openStatus = device.openRFCOMMChannelAsync(&rfcommChannel, withChannelID: channelID, delegate: self)
+        // This runs in the helper process, not the UI. The synchronous result also
+        // reports failures when the OS does not deliver its async completion callback.
+        let openStatus = device.openRFCOMMChannelSync(&rfcommChannel, withChannelID: channelID, delegate: self)
         guard openStatus == kIOReturnSuccess, let opened = rfcommChannel else {
-            fail("could not open the RFCOMM channel (status 0x\(String(openStatus, radix: 16)))")
+            fail("could not open the CarPlay Bluetooth channel (status 0x\(String(UInt32(bitPattern: openStatus), radix: 16)))")
         }
         channel = opened
-        FileHandle.standardError.write("bt-bridge: RFCOMM channel \(channelID) opening to \(address)\n".data(using: .utf8)!)
-        pumpStdin()
-        RunLoop.main.run()
+        if opened.isOpen() && !channelOpened {
+            rfcommChannelOpenComplete(opened, status: kIOReturnSuccess)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            if self?.channelOpened == false {
+                fail("CarPlay Bluetooth channel timed out after the saved pairing connected")
+            }
+        }
     }
 
     private func pumpStdin() {
@@ -118,20 +203,36 @@ final class Bridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
                 FileHandle.standardError.write("bt-bridge: stdin closed\n".data(using: .utf8)!)
                 exit(0)
             }
-            guard let channel = self.channel else { return }
-            var buffer = [UInt8](data)
-            let status = channel.writeSync(&buffer, length: UInt16(buffer.count))
-            if status != kIOReturnSuccess {
-                FileHandle.standardError.write("bt-bridge: write failed 0x\(String(status, radix: 16))\n".data(using: .utf8)!)
+            DispatchQueue.main.async {
+                guard let channel = self.channel else { return }
+                // Keep chunks below both the RFCOMM MTU and the API's 16-bit length limit.
+                let chunkSize = max(1, Int(channel.getMTU()))
+                for start in stride(from: 0, to: data.count, by: chunkSize) {
+                    var buffer = [UInt8](data[start..<min(start + chunkSize, data.count)])
+                    let status = channel.writeSync(&buffer, length: UInt16(buffer.count))
+                    if status != kIOReturnSuccess {
+                        fail("RFCOMM write failed (status 0x\(String(status, radix: 16)))")
+                    }
+                }
             }
         }
     }
 
     func rfcommChannelOpenComplete(_ sender: IOBluetoothRFCOMMChannel!, status error: IOReturn) {
         if error == kIOReturnSuccess {
+            guard !channelOpened else { return }
+            channelOpened = true
+            channel = sender
             FileHandle.standardError.write("bt-bridge: RFCOMM channel open\n".data(using: .utf8)!)
+            if checkOnly {
+                print("CarPlay Bluetooth channel opened successfully")
+                fflush(stdout)
+                channel?.close()
+                exit(0)
+            }
+            pumpStdin()
         } else {
-            fail("RFCOMM open failed (status 0x\(String(error, radix: 16)))")
+            fail("RFCOMM open failed (status 0x\(String(UInt32(bitPattern: error), radix: 16)))")
         }
     }
 
@@ -174,6 +275,10 @@ final class Scanner: NSObject, IOBluetoothDeviceInquiryDelegate {
     private var seen = Set<String>()
 
     func start(seconds: UInt8) {
+        // Saved phones need not be discoverable just to appear in the picker.
+        for device in IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? [] {
+            report(device)
+        }
         guard let inquiry = IOBluetoothDeviceInquiry(delegate: self) else {
             fail("could not create a device inquiry")
         }
@@ -185,10 +290,20 @@ final class Scanner: NSObject, IOBluetoothDeviceInquiryDelegate {
             fail("inquiry failed to start (status 0x\(String(status, radix: 16))); grant Bluetooth permission to your terminal")
         }
         FileHandle.standardError.write("bt-bridge: scanning for \(seconds)s — keep the iPhone's Bluetooth settings page open\n".data(using: .utf8)!)
-        RunLoop.main.run()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(seconds) + 5) { [weak self] in
+            guard let self else { return }
+            self.inquiry?.stop()
+            FileHandle.standardError.write(Data("bt-bridge: discovery time limit reached; keeping devices already found\n".utf8))
+            exit(self.seen.isEmpty ? 1 : 0)
+        }
+        withExtendedLifetime(self) { RunLoop.main.run() }
     }
 
     func deviceInquiryDeviceFound(_ sender: IOBluetoothDeviceInquiry!, device: IOBluetoothDevice!) {
+        report(device)
+    }
+
+    private func report(_ device: IOBluetoothDevice) {
         let address = (device.addressString ?? "").uppercased().replacingOccurrences(of: "-", with: ":")
         guard !address.isEmpty, seen.insert(address).inserted else { return }
         let name = device.name ?? ""
@@ -205,10 +320,9 @@ final class Scanner: NSObject, IOBluetoothDeviceInquiryDelegate {
     }
 }
 
-final class Pairer: NSObject, IOBluetoothDevicePairDelegate, IOBluetoothDeviceInquiryDelegate {
+final class Pairer: NSObject, IOBluetoothDevicePairDelegate {
     private let target: String
     private let force: Bool
-    private var inquiry: IOBluetoothDeviceInquiry?
     private var pairing: IOBluetoothDevicePair?
     private var finished = false
 
@@ -220,27 +334,19 @@ final class Pairer: NSObject, IOBluetoothDevicePairDelegate, IOBluetoothDeviceIn
     func run() {
         if let device = pairedDevice(matching: target) {
             if !force {
-                print("\(target) is already paired; nothing to do.")
-                print("Start the server with --wireless and it will find the iPhone (or check --list).")
+                print("using saved pairing with \(target)")
                 exit(0)
             }
             beginPairing(with: device)
             return
         }
-        FileHandle.standardError.write(
-            "bt-bridge: \(target) is not paired yet; scanning — keep the iPhone's Bluetooth settings page open\n"
-                .data(using: .utf8)!,
-        )
-        guard let inquiry = IOBluetoothDeviceInquiry(delegate: self) else {
-            fail("could not create a device inquiry")
+        // The user already selected this address from discovery. A second inquiry
+        // can deliver its stopped callback before pairing is assigned and falsely
+        // report "not found". Resolve the selected address directly instead.
+        guard let device = IOBluetoothDevice(addressString: target) else {
+            fail("selected Bluetooth address could not be resolved")
         }
-        self.inquiry = inquiry
-        inquiry.inquiryLength = 20
-        inquiry.updateNewDeviceNames = true
-        guard inquiry.start() == kIOReturnSuccess else {
-            fail("inquiry failed to start; grant Bluetooth permission to your terminal")
-        }
-        RunLoop.main.run()
+        beginPairing(with: device)
     }
 
     private func pairedDevice(matching address: String) -> IOBluetoothDevice? {
@@ -250,8 +356,6 @@ final class Pairer: NSObject, IOBluetoothDevicePairDelegate, IOBluetoothDeviceIn
     }
 
     private func beginPairing(with device: IOBluetoothDevice) {
-        inquiry?.stop()
-        inquiry = nil
         guard let pairing = IOBluetoothDevicePair(device: device) else {
             fail("could not create a pairing session")
         }
@@ -262,13 +366,13 @@ final class Pairer: NSObject, IOBluetoothDevicePairDelegate, IOBluetoothDeviceIn
             fail("pairing failed to start (status 0x\(String(status, radix: 16)))")
         }
         FileHandle.standardError.write("bt-bridge: pairing with \(device.addressString ?? target)…\n".data(using: .utf8)!)
-        let watchdog = DispatchQueue.global()
-        watchdog.asyncAfter(deadline: .now() + 45) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
             if !self.finished {
-                fail("pairing timed out after 45s; make sure the iPhone is awake and unlocked with Settings > Bluetooth open, then retry")
+                self.pairing?.stop()
+                fail("pairing timed out after 90s; macOS did not report a completed Bluetooth pairing")
             }
         }
-        RunLoop.main.run()
+        withExtendedLifetime(self) { RunLoop.main.run() }
     }
 
     func devicePairingStarted(_ sender: Any!) {
@@ -279,22 +383,26 @@ final class Pairer: NSObject, IOBluetoothDevicePairDelegate, IOBluetoothDeviceIn
         FileHandle.standardError.write("bt-bridge: link connecting…\n".data(using: .utf8)!)
     }
 
-    func deviceInquiryDeviceFound(_ sender: IOBluetoothDeviceInquiry!, device: IOBluetoothDevice!) {
-        guard normalize(device.addressString ?? "") == normalize(target) else { return }
-        beginPairing(with: device)
-    }
-
-    func deviceInquiryComplete(_ sender: IOBluetoothDeviceInquiry!, error: IOReturn, aborted: Bool) {
-        if pairing == nil {
-            fail("device \(target) was not found; make sure it is discoverable (Bluetooth settings open) and try again")
-        }
-    }
-
     func devicePairingUserConfirmationRequest(_ sender: Any!, numericValue: BluetoothNumericValue) {
+        guard let request = sender as? IOBluetoothDevicePair else {
+            fail("confirmation request did not include a pairing session")
+        }
         let code = String(format: "%06u", numericValue)
         print("confirm this code on the iPhone: \(code)")
         fflush(stdout)
-        pairing?.replyUserConfirmation(true)
+        // The GUI and CLI both require explicit confirmation of the displayed code.
+        DispatchQueue.global().async {
+            let accepted = readLine() == "confirm"
+            FileHandle.standardError.write(Data("bt-bridge: user confirmation received: \(accepted)\n".utf8))
+            DispatchQueue.main.async {
+                request.replyUserConfirmation(accepted)
+                FileHandle.standardError.write(Data("bt-bridge: user confirmation delivered to Bluetooth: \(accepted)\n".utf8))
+            }
+        }
+    }
+
+    func deviceSimplePairingComplete(_ sender: Any!, status: BluetoothHCIEventStatus) {
+        FileHandle.standardError.write(Data("bt-bridge: secure pairing completed with status 0x\(String(status, radix: 16))\n".utf8))
     }
 
     func devicePairingUserPasskeyNotification(_ sender: Any!, passkey: BluetoothPasskey) {
@@ -313,7 +421,7 @@ final class Pairer: NSObject, IOBluetoothDevicePairDelegate, IOBluetoothDeviceIn
             print("paired with \(target)")
             exit(0)
         }
-        fail("pairing finished with status 0x\(String(error, radix: 16)); remove any stale pairing and retry")
+        fail("pairing failed with Bluetooth status 0x\(String(UInt32(bitPattern: error), radix: 16)); code confirmation alone does not establish the connection")
     }
 }
 
@@ -330,6 +438,8 @@ if args.contains("--print-address") {
     Pairer(target: args[index + 1], force: true).run()
 } else if let index = args.firstIndex(of: "--address"), index + 1 < args.count {
     Bridge().start(address: args[index + 1])
+} else if let index = args.firstIndex(of: "--check-link"), index + 1 < args.count {
+    Bridge(checkOnly: true).start(address: args[index + 1])
 } else {
     fail("usage: bt-bridge --print-address | --list | --scan | --pair <addr> | --force-pair <addr> | --address <addr>")
 }

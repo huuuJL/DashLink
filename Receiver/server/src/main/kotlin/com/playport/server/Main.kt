@@ -6,6 +6,9 @@ import io.ktor.server.engine.sslConnector
 import io.ktor.server.netty.Netty
 import java.nio.file.Path
 import kotlin.system.exitProcess
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
 
 fun main(args: Array<String>) {
@@ -18,9 +21,24 @@ fun main(args: Array<String>) {
     val store = ConfigStore(bootstrap.stateDir)
     val saved = store.load()
     // Second pass: saved settings are defaults; CLI flags still win.
-    val config = saved?.let { persisted ->
+    var config = saved?.let { persisted ->
         ServerConfig.fromArgs(args, persisted.toServerDefaults(bootstrap.identityDir, bootstrap.stateDir))
     } ?: bootstrap
+
+    val desktop = args.contains("--desktop")
+    if (desktop) {
+        // DashLink sends secrets through a private pipe, never through command-line arguments.
+        val secrets = Json.parseToJsonElement(readln()).jsonObject
+        config = config.copy(
+            wifiSsid = secrets["ssid"]?.jsonPrimitive?.content,
+            wifiPassphrase = secrets["password"]?.jsonPrimitive?.content,
+            accessToken = secrets["token"]!!.jsonPrimitive.content,
+            nativeBluetoothPort = secrets["nativeBtPort"]?.jsonPrimitive?.content?.toInt(),
+            nativeBluetoothToken = secrets["nativeBtToken"]?.jsonPrimitive?.content,
+            nativeBluetoothAddress = secrets["nativeBtAddress"]?.jsonPrimitive?.content,
+            insecureHttp = true,
+        )
+    }
 
     if (saved != null) {
         log.info("loaded settings from {}", bootstrap.stateDir.resolve("config.json"))
@@ -38,9 +56,9 @@ fun main(args: Array<String>) {
     }
 
     val webRoot = Path.of("web/dist").toAbsolutePath().normalize()
-    val tls = TlsCertificate.loadOrCreate(config.stateDir, listOf(server.bindAddress))
+    val tls = if (!config.insecureHttp) TlsCertificate.loadOrCreate(config.stateDir, listOf(server.bindAddress)) else null
     val http = if (config.insecureHttp) {
-        embeddedServer(Netty, port = config.httpPort, host = "0.0.0.0") {
+        embeddedServer(Netty, port = config.httpPort, host = if (desktop) "127.0.0.1" else "0.0.0.0") {
             server.hub.install(this, webRoot)
         }
     } else {
@@ -48,7 +66,7 @@ fun main(args: Array<String>) {
             Netty,
             environment = applicationEnvironment { },
             configure = {
-                sslConnector(tls.keyStore, tls.alias, { tls.password }, { tls.password }) {
+                sslConnector(tls!!.keyStore, tls.alias, { tls.password }, { tls.password }) {
                     host = "0.0.0.0"
                     port = config.httpPort
                 }
@@ -73,7 +91,8 @@ fun main(args: Array<String>) {
     println("  ------------------------------------------------------------------")
     println("  CarPlay device name : ${config.deviceName}")
     println("  AirPlay listener    : ${server.bindAddress.hostAddress}:${config.airPlayPort}")
-    println("  Browser UI          : $url")
+    if (!desktop) println("  Browser UI          : $url")
+    else println("DASHLINK_READY")
     if (!config.insecureHttp) {
         println("  (accept the self-signed certificate warning once; WebCodecs needs HTTPS)")
     }
@@ -91,6 +110,13 @@ fun main(args: Array<String>) {
             runCatching { http.stop(1_000, 3_000) }
         },
     )
+    if (desktop) {
+        // Parent exit closes stdin; do not leave a receiver running after the Mac app quits.
+        Thread({
+            while (System.`in`.read() != -1) { }
+            exitProcess(0)
+        }, "desktop-parent-watch").apply { isDaemon = true; start() }
+    }
     Thread.currentThread().join()
 }
 

@@ -65,7 +65,8 @@ class CarPlayServer(val config: ServerConfig, private val configStore: ConfigSto
         get() = AirPlayConfig(
             deviceName = config.deviceName,
             deviceId = deviceId,
-            btMac = deviceId,
+            // Associate resources with the native wireless bootstrap identity.
+            btMac = config.nativeBluetoothAddress ?: deviceId,
             sourceVersion = config.sourceVersion,
             main = com.shilapi.xcertplay.airplay.CarPlayUiScale.apply(
                 AirPlayDisplayConfig(

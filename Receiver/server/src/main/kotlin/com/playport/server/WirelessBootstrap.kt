@@ -2,6 +2,7 @@ package com.playport.server
 
 import com.shilapi.xcertplay.iap2.session.Iap2Session
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
+import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
 import com.shilapi.xcertplay.transport.Iap2WirelessCarPlayEndpoint
 import com.shilapi.xcertplay.transport.Iap2WirelessControlClient
@@ -16,12 +17,13 @@ import org.slf4j.LoggerFactory
  * Wireless CarPlay bring-up: Bluetooth RFCOMM iAP2 bootstrap, Wi-Fi credentials handoff and the
  * tunneled iAP2 handover.
  *
- * Requires the macOS `bt-bridge` helper (macos/bt-bridge) with the iPhone already paired in
- * System Settings, and the server running on the Wi-Fi network the phone should join.
+ * Desktop mode uses the native app’s authenticated loopback Bluetooth transport.
+ * Standalone mode uses the macOS bt-bridge helper. Both require a paired iPhone
+ * and the server running on the Wi-Fi network the phone should join.
  */
 class WirelessBootstrap(private val server: CarPlayServer) : Closeable {
     private val log = LoggerFactory.getLogger("wireless")
-    @Volatile private var bridgeProcess: ProcessByteStream? = null
+    @Volatile private var bridgeProcess: Closeable? = null
     @Volatile private var stopped = false
     @Volatile var running = false
         private set
@@ -51,7 +53,7 @@ class WirelessBootstrap(private val server: CarPlayServer) : Closeable {
                 log.warn("no --wifi-passphrase configured; the phone must already know network {}", wifi.ssid)
             }
             val bridgePath = resolveBridgePath(config.bluetoothBridge)
-            if (bridgePath == null) {
+            if (bridgePath == null && config.nativeBluetoothPort == null) {
                 log.warn(
                     "wireless bootstrap skipped: bt-bridge helper not found; " +
                         "build it with macos/bt-bridge/build.sh or pass --bt-bridge",
@@ -59,15 +61,21 @@ class WirelessBootstrap(private val server: CarPlayServer) : Closeable {
                 return
             }
             val deviceAddress = config.bluetoothDeviceAddress?.takeIf { it.isNotBlank() }
-                ?: BluetoothBridge.findPairedIphone(bridgePath)
+                ?: bridgePath?.let { BluetoothBridge.findPairedIphone(it) }
             if (deviceAddress == null) {
                 log.warn("wireless bootstrap skipped: no paired iPhone found; pass --bt-address AA:BB:CC:DD:EE:FF")
                 return
             }
-            val hostBluetoothMac = BluetoothBridge.localAddress(bridgePath) ?: server.deviceId
+            val hostBluetoothMac = config.nativeBluetoothAddress
+                ?: bridgePath?.let { BluetoothBridge.localAddress(it) } ?: server.deviceId
             log.info("wireless bootstrap: iPhone={} hostBt={} wifi={} ch={}", deviceAddress, hostBluetoothMac, wifi.ssid, wifi.channel)
 
-            val stream = BluetoothBridge.open(bridgePath, deviceAddress).also { bridgeProcess = it }
+            val stream: BlockingDuplexByteStream = if (config.nativeBluetoothPort != null) {
+                NativeBluetoothByteStream.connect(config.nativeBluetoothPort,
+                    requireNotNull(config.nativeBluetoothToken)).also { bridgeProcess = it }
+            } else {
+                BluetoothBridge.open(requireNotNull(bridgePath), deviceAddress).also { bridgeProcess = it }
+            }
             val channel = Iap2Session.openWireless(stream, traceContext = "wireless-rfcomm", onTrace = { log.debug(it) })
             log.info("wireless iAP2 CSM channel opened over RFCOMM")
 
