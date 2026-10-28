@@ -51,7 +51,6 @@ function fitScreen(): void {
 
 new ResizeObserver(fitScreen).observe(screenContainer);
 
-let audioUnlocked = false;
 let framesPainted = 0;
 let framesReceived = 0;
 let bytesReceived = 0;
@@ -293,11 +292,9 @@ muteButton.addEventListener('click', () => {
 });
 
 async function unlockAudio(): Promise<void> {
-  if (audioUnlocked) return;
   try {
     await audio.unlock();
-    audioUnlocked = true;
-    requiredElement('audio-unlock-hint').hidden = true;
+    requiredElement('audio-unlock-hint').hidden = audio.isUnlocked;
   } catch {
     // The next gesture retries.
   }
@@ -305,6 +302,9 @@ async function unlockAudio(): Promise<void> {
 
 window.addEventListener('pointerdown', () => void unlockAudio(), { once: false });
 window.addEventListener('keydown', () => void unlockAudio(), { once: false });
+// DashLink's native viewer allows playback without another click after Start.
+// Attempt it on every page load; browser restrictions retain the gesture fallback.
+void unlockAudio();
 
 if (!token) {
   setStatus('idle', 'Access link needed');
@@ -524,6 +524,12 @@ function updateStats(): void {
 }
 
 window.setInterval(updateStats, 500);
+
+// Keep playback diagnostics local, alongside the receiver's packet timing logs.
+window.setInterval(() => {
+  const audioStats = audio.takePlaybackStats();
+  if (audioStats.scheduled > 0 || audioStats.dropped > 0) connection.send({ type: 'audioStats', audioStats });
+}, 5000);
 
 // --- Call / night controls ---
 

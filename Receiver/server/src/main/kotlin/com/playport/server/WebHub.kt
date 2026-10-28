@@ -49,7 +49,20 @@ data class ClientMessage(
     val knob: KnobMessage? = null,
     val night: Boolean? = null,
     val telephony: Int? = null,
+    val audioStats: AudioPlaybackStats? = null,
 )
+
+@Serializable
+data class AudioPlaybackStats(
+    val scheduled: Int = 0,
+    val underruns: Int = 0,
+    val dropped: Int = 0,
+    val maxQueuedMs: Int = 0,
+    val maxArrivalGapMs: Int = 0,
+) {
+    fun valid(): Boolean = listOf(scheduled, underruns, dropped, maxQueuedMs, maxArrivalGapMs)
+        .all { it in 0..10_000_000 }
+}
 
 @Serializable
 data class DisplayRequest(
@@ -82,6 +95,7 @@ private class WsClient(
 ) {
     val imageReady = java.util.concurrent.atomic.AtomicBoolean(false)
     val keyframeRequested = AtomicLong(0)
+    val lastAudioStats = AtomicLong(0)
 }
 
 /** Fan-out hub: browsers connect here and the media bridge pushes CarPlay frames to all of them. */
@@ -322,7 +336,18 @@ class WebHub(
                         } catch (_: Exception) {
                             continue
                         }
-                        if (message.type == "keyframe") {
+                        if (message.type == "audioStats") {
+                            val stats = message.audioStats ?: continue
+                            val now = System.nanoTime()
+                            val previous = client.lastAudioStats.get()
+                            if (stats.valid() && now - previous >= 1_000_000_000L &&
+                                client.lastAudioStats.compareAndSet(previous, now)) {
+                                org.slf4j.LoggerFactory.getLogger("playport").info(
+                                    "Audio playback: scheduled={} underruns={} dropped={} maxQueuedMs={} maxArrivalGapMs={}",
+                                    stats.scheduled, stats.underruns, stats.dropped, stats.maxQueuedMs, stats.maxArrivalGapMs,
+                                )
+                            }
+                        } else if (message.type == "keyframe") {
                             configByStream.keys.forEach { streamType -> onViewerJoined?.invoke(streamType) }
                         } else if (message.type == "ping") {
                             client.channel.trySend(Frame.Text("""{"type":"pong"}"""))

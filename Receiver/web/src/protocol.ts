@@ -88,6 +88,7 @@ export type ClientMessage =
   | { type: 'night'; night: boolean }
   | { type: 'telephony'; telephony: number }
   | { type: 'keyframe' }
+  | { type: 'audioStats'; audioStats: { scheduled: number; underruns: number; dropped: number; maxQueuedMs: number; maxArrivalGapMs: number } }
   | { type: 'ping' };
 
 export interface ServerMessage {

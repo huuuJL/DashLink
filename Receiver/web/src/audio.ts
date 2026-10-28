@@ -8,10 +8,28 @@ interface StreamState {
   decoder: AudioDecoder | null;
   nextPlayTime: number;
   gain: GainNode;
+  sources: Set<AudioBufferSourceNode>;
+  active: boolean;
+  targetBuffer: number;
+  maxBuffer: number;
 }
 
-const MIN_LATENCY_SECONDS = 0.12;
-const MAX_LATENCY_SECONDS = 0.35;
+const VOICE_TARGET_SECONDS = 0.12;
+const VOICE_MAX_SECONDS = 0.35;
+// The tested wireless music stream arrives in bursts separated by ~400 ms.
+// Keep enough music to bridge that gap plus decode/render jitter. Voice routes
+// retain their shorter buffer because conversation has different latency needs.
+const MUSIC_TARGET_SECONDS = 0.60;
+const MUSIC_MAX_SECONDS = 1.20;
+const SCHEDULING_MARGIN_SECONDS = 0.005;
+
+export interface AudioPlaybackStats {
+  scheduled: number;
+  underruns: number;
+  dropped: number;
+  maxQueuedMs: number;
+  maxArrivalGapMs: number;
+}
 
 /** Decodes and plays CarPlay audio streams (AAC-LC, Opus, LPCM) via Web Audio. */
 export class AudioEngine {
@@ -19,7 +37,8 @@ export class AudioEngine {
   private readonly gain: GainNode;
   private readonly streams = new Map<number, StreamState>();
   private readonly streamGains = new Map<string, number>();
-  private unlocked = false;
+  private stats: AudioPlaybackStats = this.emptyStats();
+  private lastPacketAt = new Map<number, number>();
 
   constructor(private readonly onError: (message: string) => void) {
     this.context = new AudioContext({ latencyHint: 'interactive' });
@@ -28,13 +47,12 @@ export class AudioEngine {
   }
 
   get isUnlocked(): boolean {
-    return this.unlocked;
+    return this.context.state === 'running';
   }
 
-  /** Must run inside a user gesture so the browser allows audio playback. */
+  /** The native viewer permits playback; ordinary browsers may need a gesture. */
   async unlock(): Promise<void> {
-    await this.context.resume();
-    this.unlocked = true;
+    if (!this.isUnlocked) await this.context.resume();
   }
 
   setVolume(volume: number): void {
@@ -53,6 +71,17 @@ export class AudioEngine {
     return Array.from(new Set(Array.from(this.streams.values(), (state) => state.name))).sort();
   }
 
+  /** Numeric playback health only; no audio samples, track names, or device IDs. */
+  takePlaybackStats(): AudioPlaybackStats {
+    const stats = this.stats;
+    this.stats = this.emptyStats();
+    return stats;
+  }
+
+  private emptyStats(): AudioPlaybackStats {
+    return { scheduled: 0, underruns: 0, dropped: 0, maxQueuedMs: 0, maxArrivalGapMs: 0 };
+  }
+
   handleConfig(message: AudioConfigMessage): void {
     this.closeStream(message.streamType);
     const streamGain = this.context.createGain();
@@ -66,6 +95,10 @@ export class AudioEngine {
       decoder: null,
       nextPlayTime: 0,
       gain: streamGain,
+      sources: new Set(),
+      active: true,
+      targetBuffer: message.name.toLowerCase() === 'media' ? MUSIC_TARGET_SECONDS : VOICE_TARGET_SECONDS,
+      maxBuffer: message.name.toLowerCase() === 'media' ? MUSIC_MAX_SECONDS : VOICE_MAX_SECONDS,
     };
     if (message.codec === AudioCodec.AacLc || message.codec === AudioCodec.Opus) {
       if (typeof AudioDecoder === 'undefined') {
@@ -80,7 +113,7 @@ export class AudioEngine {
         decoder = new AudioDecoder({
           output: (data) => {
             try {
-              this.playAudioData(state, data);
+              if (state.active) this.playAudioData(state, data);
             } finally {
               data.close();
             }
@@ -112,6 +145,10 @@ export class AudioEngine {
   handlePacket(message: AudioPacketMessage): void {
     const state = this.streams.get(message.streamType);
     if (!state) return;
+    const now = performance.now();
+    const previous = this.lastPacketAt.get(message.streamType);
+    if (previous !== undefined) this.stats.maxArrivalGapMs = Math.max(this.stats.maxArrivalGapMs, Math.round(now - previous));
+    this.lastPacketAt.set(message.streamType, now);
     if (state.decoder) {
       try {
         state.decoder.decode(
@@ -143,6 +180,9 @@ export class AudioEngine {
     const state = this.streams.get(streamType);
     if (!state) return;
     this.streams.delete(streamType);
+    this.lastPacketAt.delete(streamType);
+    state.active = false;
+    this.cancelScheduledAudio(state);
     runCatchingDisconnect(state.gain);
     if (state.decoder) {
       try {
@@ -154,7 +194,7 @@ export class AudioEngine {
   }
 
   private playAudioData(state: StreamState, data: AudioData): void {
-    if (!this.unlocked) return;
+    if (!this.isUnlocked) return;
     const numberOfChannels = Math.max(1, data.numberOfChannels);
     const buffer = this.context.createBuffer(numberOfChannels, data.numberOfFrames, data.sampleRate);
     for (let channel = 0; channel < numberOfChannels; channel += 1) {
@@ -166,7 +206,7 @@ export class AudioEngine {
   }
 
   private playPcm(state: StreamState, payload: Uint8Array): void {
-    if (!this.unlocked || payload.length < 2) return;
+    if (!this.isUnlocked || payload.length < 2) return;
     const sampleCount = Math.floor(payload.length / 2);
     const channels = Math.max(1, state.channels);
     const frames = Math.max(1, Math.floor(sampleCount / channels));
@@ -185,14 +225,42 @@ export class AudioEngine {
 
   private schedule(state: StreamState, buffer: AudioBuffer): void {
     const now = this.context.currentTime;
-    if (state.nextPlayTime < now + MIN_LATENCY_SECONDS || state.nextPlayTime > now + MAX_LATENCY_SECONDS) {
-      state.nextPlayTime = now + MIN_LATENCY_SECONDS;
+    // The target buffer is only for startup/recovery. Reapplying it to every
+    // packet inserts a gap whenever delivery jitters, even with audio queued.
+    // Preserve audio already playing/queued when a decoder catches up in a
+    // burst. Repeatedly cancelling it can keep resetting the startup buffer
+    // before anything reaches the speakers. Drop surplus decoded buffers
+    // until the bounded queue has room again.
+    if (state.nextPlayTime > now + state.maxBuffer) {
+      this.stats.dropped += 1;
+      return;
+    }
+    if (state.nextPlayTime < now + SCHEDULING_MARGIN_SECONDS) {
+      if (state.nextPlayTime > 0) this.stats.underruns += 1;
+      state.nextPlayTime = now + state.targetBuffer;
     }
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.connect(state.gain);
+    state.sources.add(source);
+    source.onended = () => {
+      state.sources.delete(source);
+      runCatchingDisconnect(source);
+    };
     source.start(state.nextPlayTime);
     state.nextPlayTime += buffer.duration;
+    this.stats.scheduled += 1;
+    this.stats.maxQueuedMs = Math.max(this.stats.maxQueuedMs, Math.round((state.nextPlayTime - now) * 1000));
+  }
+
+  private cancelScheduledAudio(state: StreamState): void {
+    for (const source of state.sources) {
+      source.onended = null;
+      try { source.stop(); } catch { /* Already ended. */ }
+      runCatchingDisconnect(source);
+    }
+    state.sources.clear();
+    state.nextPlayTime = 0;
   }
 }
 

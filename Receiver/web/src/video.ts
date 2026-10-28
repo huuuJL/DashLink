@@ -26,6 +26,8 @@ export class VideoPlayer {
   private watchdog: number | null = null;
   private framesRendered = 0;
   private lastFrameSize = { width: 0, height: 0 };
+  private pendingFrame: VideoFrame | null = null;
+  private paintRequest: number | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -81,6 +83,7 @@ export class VideoPlayer {
       codedWidth: message.width,
       codedHeight: message.height,
       hardwareAcceleration: this.preferHardware ? 'prefer-hardware' : 'no-preference',
+      optimizeForLatency: true,
       ...(descriptionPresent ? { description: message.codecData } : {}),
     };
     const decoder = this.createDecoder();
@@ -101,6 +104,7 @@ export class VideoPlayer {
         codedWidth: message.width,
         codedHeight: message.height,
         hardwareAcceleration: candidate.software ? 'no-preference' : 'prefer-hardware',
+        optimizeForLatency: true,
         ...(candidate.description ? { description: candidate.description } : {}),
       };
       const support = await VideoDecoder.isConfigSupported(config).catch(() => null);
@@ -163,6 +167,7 @@ export class VideoPlayer {
     const state = this.state;
     this.state = null;
     this.clearWatchdog();
+    this.clearPendingFrame();
     if (state) {
       try {
         state.decoder.close();
@@ -192,14 +197,28 @@ export class VideoPlayer {
   private createDecoder(): VideoDecoder {
     return new VideoDecoder({
       output: (frame) => {
-        try {
-          this.paint(frame);
-        } finally {
-          frame.close();
-        }
+        // Decoded frames are independent. Paint only the newest one at the
+        // next display refresh, freeing replaced GPU buffers immediately.
+        this.pendingFrame?.close();
+        this.pendingFrame = frame;
+        if (this.paintRequest !== null) return;
+        this.paintRequest = window.requestAnimationFrame(() => {
+          this.paintRequest = null;
+          const latest = this.pendingFrame;
+          this.pendingFrame = null;
+          if (!latest) return;
+          try { this.paint(latest); } finally { latest.close(); }
+        });
       },
       error: (error) => this.fail(`Video decoder error: ${error.message}`),
     });
+  }
+
+  private clearPendingFrame(): void {
+    if (this.paintRequest !== null) window.cancelAnimationFrame(this.paintRequest);
+    this.paintRequest = null;
+    this.pendingFrame?.close();
+    this.pendingFrame = null;
   }
 
   private armWatchdog(): void {

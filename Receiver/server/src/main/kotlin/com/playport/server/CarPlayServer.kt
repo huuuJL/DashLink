@@ -65,7 +65,8 @@ class CarPlayServer(val config: ServerConfig, private val configStore: ConfigSto
         get() = AirPlayConfig(
             deviceName = config.deviceName,
             deviceId = deviceId,
-            // Associate resources with the native wireless bootstrap identity.
+            // Associate AirPlay/CarPlay resources with the same Bluetooth host
+            // used by the native wireless bootstrap, rather than its generated ID.
             btMac = config.nativeBluetoothAddress ?: deviceId,
             sourceVersion = config.sourceVersion,
             main = com.shilapi.xcertplay.airplay.CarPlayUiScale.apply(
@@ -80,7 +81,11 @@ class CarPlayServer(val config: ServerConfig, private val configStore: ConfigSto
             port = config.airPlayPort,
             entertainmentSampleRate = 48_000,
             hevc = display.hevc,
-            microphone = false,
+            // Match the media engine's supported input path. An output-only
+            // declaration can make iOS omit the entire CarPlay audio route
+            // (DiPlay issue #288). Actual capture remains permission-gated
+            // in the viewer and is requested only for an input stream.
+            microphone = true,
             manufacturer = config.manufacturer,
             model = config.model,
             oemLabel = config.deviceName,
@@ -111,6 +116,15 @@ class CarPlayServer(val config: ServerConfig, private val configStore: ConfigSto
 
         override fun onCommand(session: AirPlaySession, type: String, params: Map<String, Any?>) {
             log.debug("AirPlay command type={} params={}", type, params.keys.sorted().joinToString(","))
+            if (type == "modesChanged") {
+                // Record only numeric ownership fields, never app content or media metadata.
+                val resources = (params["resources"] as? List<*>)?.mapNotNull { item ->
+                    (item as? Map<*, *>)?.entries?.filter { (key, value) ->
+                        key in setOf("resourceID", "entity", "owner", "borrower", "transferType") && value is Number
+                    }?.associate { it.key.toString() to it.value }
+                }
+                log.info("CarPlay resource ownership: {}", resources)
+            }
         }
 
         override fun onDebugLog(message: String) {
